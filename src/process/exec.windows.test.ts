@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -85,6 +86,34 @@ describe("windows command wrapper behavior", () => {
       expectCmdWrappedInvocation({ captured, expectedComSpec });
     } finally {
       platformSpy.mockRestore();
+    }
+  });
+
+  it("wraps npm.cmd via cmd.exe when npm-cli.js is not found", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    // Force the fallback path by making npm-cli.js appear to not exist
+    const fsMock = vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    const expectedComSpec = process.env.ComSpec ?? "cmd.exe";
+
+    spawnMock.mockImplementation(
+      (_command: string, _args: string[], _options: Record<string, unknown>) => createMockChild(),
+    );
+
+    try {
+      const result = await runCommandWithTimeout(["npm", "--version"], { timeoutMs: 1000 });
+      expect(result.code).toBe(0);
+      const captured = spawnMock.mock.calls[0] as SpawnCall | undefined;
+      if (!captured) {
+        throw new Error("expected spawn to be called");
+      }
+      // When npm-cli.js is not found, npm should be resolved to npm.cmd and wrapped via cmd.exe
+      expect(captured[0]).toBe(expectedComSpec);
+      expect(captured[1].slice(0, 3)).toEqual(["/d", "/s", "/c"]);
+      expect(captured[1][3]).toContain("npm.cmd --version");
+      expect(captured[2].windowsVerbatimArguments).toBe(true);
+    } finally {
+      platformSpy.mockRestore();
+      fsMock.mockRestore();
     }
   });
 
